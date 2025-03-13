@@ -12,7 +12,7 @@ interface AuthState {
 }
 
 // API URL
-const API_URL = "http://localhost:3001/api";
+const API_URL = import.meta.env.VITE_API_URL + "/api" || "http://localhost:3001/api";
 
 // Create a BehaviorSubject to track authentication state
 const authState = new BehaviorSubject<AuthState>({

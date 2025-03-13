@@ -10,7 +10,7 @@ import { subscribeToAuth, getAuthState, logout } from "./services/auth";
 import { getMessages, getRoomMessages } from "./services/api";
 
 // Socket.io connection
-const SOCKET_URL = "http://localhost:3001";
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:3001";
 
 const App: React.FC = () => {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -145,7 +145,8 @@ const App: React.FC = () => {
   // Fetch room messages
   const fetchRoomMessages = async (roomName: string) => {
     try {
-      const rooms = await fetch(`http://localhost:3001/api/rooms`, {
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
+      const rooms = await fetch(`${apiUrl}/api/rooms`, {
         headers: {
           Authorization: `Bearer ${getAuthState().token}`,
         },

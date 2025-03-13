@@ -1,6 +1,6 @@
 import { getAuthHeaders } from "./auth";
 
-const API_URL = "http://localhost:3001/api";
+const API_URL = import.meta.env.VITE_API_URL + "/api" || "http://localhost:3001/api";
 
 // Generic fetch wrapper with authentication
 async function fetchWithAuth(endpoint: string, options: RequestInit = {}) {
