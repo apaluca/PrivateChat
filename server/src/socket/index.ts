@@ -1,13 +1,14 @@
 import { Server as HttpServer } from "http";
 import { Server } from "socket.io";
+import { getDb } from "../db";
 import {
-  createMessage,
-  createRoomMessage,
-  getUserById,
-  getRoomByName,
-  createRoom as dbCreateRoom,
-  getRoomById,
   verifyToken,
+  getUserById,
+  createDirectMessage,
+  createGroupMessage,
+  getOrCreateConversation,
+  isGroupMember,
+  getGroupMembers,
 } from "../db/models";
 
 export function setupSocket(httpServer: HttpServer) {
@@ -50,123 +51,154 @@ export function setupSocket(httpServer: HttpServer) {
       userId: user.userId,
     });
 
-    // Notify all clients about the new user
-    io.emit("user:joined", { username: user.username, userId: user.userId });
+    // Join the user to their personal room to receive direct messages
+    socket.join(`user:${user.userId}`);
 
     console.log(`User ${user.username} joined`);
 
-    // Handle room creation
-    socket.on("room:create", async (roomName) => {
+    // Handle direct messages
+    socket.on("direct:message:send", async ({ recipientId, content }) => {
       try {
         const user = connectedUsers.get(socket.id);
 
-        // Trim the room name to avoid whitespace issues
-        const trimmedRoomName = roomName.trim();
+        // Create or get conversation
+        const conversation = await getOrCreateConversation(
+          user.userId,
+          recipientId
+        );
 
-        // Check if room already exists - do case-insensitive check
-        const existingRoom = await getRoomByName(trimmedRoomName);
-        if (existingRoom) {
-          socket.emit("error", { message: "Room already exists" });
-          return;
-        }
-
-        // Create the room in the database
-        const roomId = await dbCreateRoom(trimmedRoomName);
-        const newRoom = await getRoomById(roomId);
-
-        // Notify all clients about the new room
-        io.emit("room:created", newRoom);
-
-        console.log(`Room ${trimmedRoomName} created by ${user.username}`);
-      } catch (error) {
-        console.error("Error creating room:", error);
-        socket.emit("error", { message: "Failed to create room" });
-      }
-    });
-
-    // Handle messages in global chat
-    socket.on("message:send", async (content) => {
-      try {
-        const user = connectedUsers.get(socket.id);
-
-        const messageId = await createMessage(user.userId, content);
-
-        // Broadcast the message to all clients including sender
-        io.emit("message:received", {
-          id: messageId,
-          content,
-          username: user.username,
-          created_at: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.error("Error sending message:", error);
-        socket.emit("error", { message: "Failed to send message" });
-      }
-    });
-
-    // Handle room join
-    socket.on("room:join", async (roomName) => {
-      try {
-        const socketRooms = Array.from(socket.rooms);
-        for (const room of socketRooms) {
-          if (room !== socket.id) {
-            socket.leave(room);
-          }
-        }
-
-        const user = connectedUsers.get(socket.id);
-        const room = await getRoomByName(roomName);
-
-        if (!room) {
-          socket.emit("error", { message: "Room not found" });
-          return;
-        }
-
-        // Join the socket room
-        socket.join(`room:${room.id}`);
-
-        // Notify room members
-        io.to(`room:${room.id}`).emit("room:user-joined", {
-          roomId: room.id,
-          username: user.username,
-        });
-
-        console.log(`User ${user.username} joined room ${roomName}`);
-      } catch (error) {
-        console.error("Error joining room:", error);
-        socket.emit("error", { message: "Failed to join room" });
-      }
-    });
-
-    // Handle room messages
-    socket.on("room:message:send", async ({ roomName, content }) => {
-      try {
-        const user = connectedUsers.get(socket.id);
-        const room = await getRoomByName(roomName);
-
-        if (!room) {
-          socket.emit("error", { message: "Room not found" });
-          return;
-        }
-
-        const messageId = await createRoomMessage(
-          room.id,
+        // Save message to database
+        const messageId = await createDirectMessage(
+          conversation.id,
           user.userId,
           content
         );
 
-        // Broadcast to room members with sender's correct information
-        io.to(`room:${room.id}`).emit("room:message:received", {
-          id: messageId,
-          roomId: room.id,
-          content,
-          username: user.username,
-          userId: user.userId,
-          created_at: new Date().toISOString(),
+        // Get message with sender info
+        const db = await getDb();
+        const message = await db.get(
+          `SELECT dm.id, dm.conversation_id, dm.content, dm.created_at, dm.sender_id, u.username as sender_name
+           FROM direct_messages dm
+           JOIN users u ON dm.sender_id = u.id
+           WHERE dm.id = ?`,
+          [messageId]
+        );
+
+        // Emit to both sender and recipient
+        io.to(`user:${user.userId}`).emit("direct:message:received", message);
+        io.to(`user:${recipientId}`).emit("direct:message:received", message);
+
+        // Also emit a separate event to notify about conversation updates
+        io.to(`user:${user.userId}`).emit("conversation:updated", {
+          conversationId: conversation.id,
+        });
+        io.to(`user:${recipientId}`).emit("conversation:updated", {
+          conversationId: conversation.id,
         });
       } catch (error) {
-        console.error("Error sending room message:", error);
-        socket.emit("error", { message: "Failed to send message to room" });
+        console.error("Error sending direct message:", error);
+        socket.emit("error", { message: "Failed to send direct message" });
+      }
+    });
+
+    // Handle group messages
+    socket.on("group:message:send", async ({ groupId, content }) => {
+      try {
+        const user = connectedUsers.get(socket.id);
+
+        // Verify user is a group member
+        const isMember = await isGroupMember(groupId, user.userId);
+        if (!isMember) {
+          socket.emit("error", {
+            message: "You are not a member of this group",
+          });
+          return;
+        }
+
+        // Save message to database
+        const messageId = await createGroupMessage(
+          groupId,
+          user.userId,
+          content
+        );
+
+        // Get message with sender info
+        const db = await getDb();
+        const message = await db.get(
+          `SELECT gm.id, gm.group_id, gm.content, gm.created_at, gm.sender_id, u.username as sender_name
+           FROM group_messages gm
+           JOIN users u ON gm.sender_id = u.id
+           WHERE gm.id = ?`,
+          [messageId]
+        );
+
+        // Get all group members
+        const members = await getGroupMembers(groupId);
+
+        // Emit to all group members individually to ensure they receive the message
+        for (const member of members) {
+          // Emit message received
+          io.to(`user:${member.user_id}`).emit(
+            "group:message:received",
+            message
+          );
+
+          // Emit group updated event
+          io.to(`user:${member.user_id}`).emit("group:updated", { groupId });
+        }
+
+        // Also broadcast to the group room for any active listeners
+        io.to(`group:${groupId}`).emit("group:message:received", message);
+      } catch (error) {
+        console.error("Error sending group message:", error);
+        socket.emit("error", { message: "Failed to send group message" });
+      }
+    });
+
+    // Handle joining a group
+    socket.on("group:join", async (groupId) => {
+      try {
+        const user = connectedUsers.get(socket.id);
+
+        // Verify user is a group member
+        const isMember = await isGroupMember(groupId, user.userId);
+        if (!isMember) {
+          socket.emit("error", {
+            message: "You are not a member of this group",
+          });
+          return;
+        }
+
+        // Join the socket room for this group
+        socket.join(`group:${groupId}`);
+        console.log(`User ${user.username} joined group ${groupId}`);
+      } catch (error) {
+        console.error("Error joining group:", error);
+        socket.emit("error", { message: "Failed to join group" });
+      }
+    });
+
+    // Handle new group created
+    socket.on("group:created", async (groupData) => {
+      try {
+        // For each member of the group, emit an event to refresh their groups list
+        for (const memberId of groupData.memberIds) {
+          io.to(`user:${memberId}`).emit("group:updated", {
+            groupId: groupData.groupId,
+          });
+        }
+      } catch (error) {
+        console.error("Error handling group created:", error);
+      }
+    });
+
+    // Handle user status changes
+    socket.on("user:status", (status) => {
+      // Update user status and broadcast to relevant users
+      const user = connectedUsers.get(socket.id);
+      if (user) {
+        user.status = status;
+        // In a real app, you'd broadcast this only to users who have conversations with this user
       }
     });
 
@@ -175,10 +207,6 @@ export function setupSocket(httpServer: HttpServer) {
       const user = connectedUsers.get(socket.id);
 
       if (user) {
-        io.emit("user:left", {
-          username: user.username,
-        });
-
         console.log(`User ${user.username} disconnected`);
       }
 

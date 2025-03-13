@@ -1,5 +1,5 @@
 export async function createTables(db: any) {
-  // Create users table with password field
+  // Create users table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9,36 +9,67 @@ export async function createTables(db: any) {
     )
   `);
 
-  // Create messages table for global chat
+  // Create direct conversations table
   await db.exec(`
-    CREATE TABLE IF NOT EXISTS messages (
+    CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      content TEXT NOT NULL,
+      user1_id INTEGER NOT NULL,
+      user2_id INTEGER NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users (id)
+      FOREIGN KEY (user1_id) REFERENCES users (id),
+      FOREIGN KEY (user2_id) REFERENCES users (id),
+      UNIQUE(user1_id, user2_id)
     )
   `);
 
-  // Create rooms table
+  // Create direct messages table
   await db.exec(`
-    CREATE TABLE IF NOT EXISTS rooms (
+    CREATE TABLE IF NOT EXISTS direct_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      conversation_id INTEGER NOT NULL,
+      sender_id INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (conversation_id) REFERENCES conversations (id),
+      FOREIGN KEY (sender_id) REFERENCES users (id)
     )
   `);
 
-  // Create room_messages table
+  // Create groups table (replacing rooms)
   await db.exec(`
-    CREATE TABLE IF NOT EXISTS room_messages (
+    CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      room_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      created_by INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by) REFERENCES users (id)
+    )
+  `);
+
+  // Create group members table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS group_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
+      is_admin BOOLEAN DEFAULT FALSE,
+      joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (group_id) REFERENCES groups (id),
+      FOREIGN KEY (user_id) REFERENCES users (id),
+      UNIQUE(group_id, user_id)
+    )
+  `);
+
+  // Create group messages table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS group_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      sender_id INTEGER NOT NULL,
       content TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (room_id) REFERENCES rooms (id),
-      FOREIGN KEY (user_id) REFERENCES users (id)
+      FOREIGN KEY (group_id) REFERENCES groups (id),
+      FOREIGN KEY (sender_id) REFERENCES users (id)
     )
   `);
 }

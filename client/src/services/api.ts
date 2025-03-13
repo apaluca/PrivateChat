@@ -1,6 +1,6 @@
 import { getAuthHeaders } from "./auth";
 
-const API_URL = import.meta.env.VITE_API_URL + "/api" || "http://localhost:3001/api";
+const API_URL = "http://localhost:3001/api";
 
 // Generic fetch wrapper with authentication
 async function fetchWithAuth(endpoint: string, options: RequestInit = {}) {
@@ -27,25 +27,82 @@ async function fetchWithAuth(endpoint: string, options: RequestInit = {}) {
   return response.json();
 }
 
-// Get recent messages
-export async function getMessages(limit = 50) {
-  return fetchWithAuth(`/messages?limit=${limit}`);
+// User search
+export async function searchUsers(query: string) {
+  return fetchWithAuth(`/users/search?q=${encodeURIComponent(query)}`);
 }
 
-// Get rooms list
-export async function getRooms() {
-  return fetchWithAuth("/rooms");
+// Direct messaging
+export async function getUserConversations() {
+  return fetchWithAuth("/conversations");
 }
 
-// Create a new room
-export async function createRoom(name: string) {
-  return fetchWithAuth("/rooms", {
+export async function createConversation(userId: number) {
+  return fetchWithAuth("/conversations", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ userId }),
   });
 }
 
-// Get room messages
-export async function getRoomMessages(roomId: number, limit = 50) {
-  return fetchWithAuth(`/rooms/${roomId}/messages?limit=${limit}`);
+export async function getConversationMessages(
+  conversationId: number,
+  limit = 50
+) {
+  return fetchWithAuth(
+    `/conversations/${conversationId}/messages?limit=${limit}`
+  );
+}
+
+export async function sendDirectMessage(
+  conversationId: number,
+  content: string
+) {
+  return fetchWithAuth(`/conversations/${conversationId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+// Group messaging
+export async function getUserGroups() {
+  return fetchWithAuth("/groups");
+}
+
+export async function createGroup(name: string, members: number[] = []) {
+  return fetchWithAuth("/groups", {
+    method: "POST",
+    body: JSON.stringify({ name, members }),
+  });
+}
+
+export async function getGroupMessages(groupId: number, limit = 50) {
+  return fetchWithAuth(`/groups/${groupId}/messages?limit=${limit}`);
+}
+
+export async function sendGroupMessage(groupId: number, content: string) {
+  return fetchWithAuth(`/groups/${groupId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function getGroupMembers(groupId: number) {
+  return fetchWithAuth(`/groups/${groupId}/members`);
+}
+
+export async function addGroupMember(
+  groupId: number,
+  userId: number,
+  isAdmin = false
+) {
+  return fetchWithAuth(`/groups/${groupId}/members`, {
+    method: "POST",
+    body: JSON.stringify({ userId, isAdmin }),
+  });
+}
+
+export async function removeGroupMember(groupId: number, userId: number) {
+  return fetchWithAuth(`/groups/${groupId}/members/${userId}`, {
+    method: "DELETE",
+  });
 }
