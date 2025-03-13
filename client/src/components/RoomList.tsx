@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
+import { getRooms, createRoom } from "../services/api";
 
 interface Room {
   id: number;
@@ -20,6 +21,8 @@ const RoomList: React.FC<RoomListProps> = ({
   const [rooms, setRooms] = useState<Room[]>([]);
   const [newRoomName, setNewRoomName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // Fetch rooms from API
@@ -45,42 +48,73 @@ const RoomList: React.FC<RoomListProps> = ({
   }, [socket]);
 
   const fetchRooms = async () => {
+    setIsLoading(true);
     try {
-      const response = await fetch("http://localhost:3001/api/rooms");
-      if (response.ok) {
-        const data = await response.json();
-        setRooms(data);
-      }
+      const data = await getRooms();
+      setRooms(data);
+      setError(null);
     } catch (error) {
       console.error("Error fetching rooms:", error);
+      setError("Failed to load rooms");
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
 
-    if (!newRoomName.trim() || !socket) return;
+    // Validate room name
+    const trimmedRoomName = newRoomName.trim();
+    if (!trimmedRoomName || !socket) {
+      setError("Room name cannot be empty");
+      return;
+    }
 
+    // Check if room name already exists
+    if (
+      rooms.some(
+        (room) => room.name.toLowerCase() === trimmedRoomName.toLowerCase()
+      )
+    ) {
+      setError("A room with this name already exists");
+      return;
+    }
+
+    setIsLoading(true);
     try {
-      // Emit socket event to create room
-      socket.emit("room:create", newRoomName);
+      // Create room via API
+      const createdRoom = await createRoom(trimmedRoomName);
+
+      // Update local room list
+      setRooms((prevRooms) => [...prevRooms, createdRoom]);
+
+      // No need to emit socket event, server will broadcast to all clients
+      // socket.emit("room:create", trimmedRoomName);
 
       setNewRoomName("");
       setIsCreating(false);
-
-      // The room list will update automatically when we receive the room:created event
-    } catch (error) {
+      setError(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
       console.error("Error creating room:", error);
-      alert(
-        "Failed to create room: " +
-          (error instanceof Error ? error.message : "Unknown error")
-      );
+      // Display the specific error message from the server if available
+      setError(error.message || "Failed to create room");
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
     <div>
       <h2 className="text-xl font-bold mb-4">Chat Rooms</h2>
+
+      {error && (
+        <div className="mb-4 p-2 bg-red-100 text-red-700 rounded text-sm">
+          {error}
+        </div>
+      )}
 
       <div className="mb-4">
         {isCreating ? (
@@ -92,18 +126,25 @@ const RoomList: React.FC<RoomListProps> = ({
               className="w-full p-2 border rounded mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Room name"
               autoFocus
+              disabled={isLoading}
             />
             <div className="flex space-x-2">
               <button
                 type="submit"
                 className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600"
+                disabled={isLoading || !newRoomName.trim()}
               >
-                Create
+                {isLoading ? "Creating..." : "Create"}
               </button>
               <button
                 type="button"
-                onClick={() => setIsCreating(false)}
+                onClick={() => {
+                  setIsCreating(false);
+                  setNewRoomName("");
+                  setError(null);
+                }}
                 className="bg-gray-300 px-3 py-1 rounded hover:bg-gray-400"
+                disabled={isLoading}
               >
                 Cancel
               </button>
@@ -121,7 +162,9 @@ const RoomList: React.FC<RoomListProps> = ({
 
       <div>
         <h3 className="font-medium mb-2">Available Rooms</h3>
-        {rooms.length === 0 ? (
+        {isLoading && rooms.length === 0 ? (
+          <p className="text-gray-500">Loading rooms...</p>
+        ) : rooms.length === 0 ? (
           <p className="text-gray-500">No rooms available</p>
         ) : (
           <ul className="space-y-2">

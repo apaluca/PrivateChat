@@ -3,10 +3,11 @@ import { Server } from "socket.io";
 import {
   createMessage,
   createRoomMessage,
-  getUserByUsername,
+  getUserById,
   getRoomByName,
   createRoom as dbCreateRoom,
   getRoomById,
+  verifyToken,
 } from "../db/models";
 
 export function setupSocket(httpServer: HttpServer) {
@@ -19,55 +20,64 @@ export function setupSocket(httpServer: HttpServer) {
 
   const connectedUsers = new Map();
 
+  // Socket.io middleware for authentication
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token;
+
+    if (!token) {
+      return next(new Error("Authentication token is required"));
+    }
+
+    const userData = verifyToken(token);
+
+    if (!userData) {
+      return next(new Error("Invalid or expired token"));
+    }
+
+    // Attach user data to socket
+    socket.data.user = userData;
+    next();
+  });
+
   io.on("connection", (socket) => {
     console.log("New client connected:", socket.id);
 
-    // Handle user join
-    socket.on("user:join", async (username) => {
-      try {
-        let user = await getUserByUsername(username);
+    const user = socket.data.user;
 
-        if (!user) {
-          socket.emit("error", { message: "User not found" });
-          return;
-        }
-
-        connectedUsers.set(socket.id, { username, userId: user.id });
-
-        // Notify all clients about the new user
-        io.emit("user:joined", { username, userId: user.id });
-
-        console.log(`User ${username} joined`);
-      } catch (error) {
-        console.error("Error when user joined:", error);
-        socket.emit("error", { message: "Failed to join" });
-      }
+    // Add user to connected users map
+    connectedUsers.set(socket.id, {
+      username: user.username,
+      userId: user.userId,
     });
+
+    // Notify all clients about the new user
+    io.emit("user:joined", { username: user.username, userId: user.userId });
+
+    console.log(`User ${user.username} joined`);
 
     // Handle room creation
     socket.on("room:create", async (roomName) => {
       try {
         const user = connectedUsers.get(socket.id);
 
-        if (!user) {
-          socket.emit("error", { message: "You must join as a user first" });
-          return;
-        }
+        // Trim the room name to avoid whitespace issues
+        const trimmedRoomName = roomName.trim();
 
-        const existingRoom = await getRoomByName(roomName);
+        // Check if room already exists - do case-insensitive check
+        const existingRoom = await getRoomByName(trimmedRoomName);
         if (existingRoom) {
           socket.emit("error", { message: "Room already exists" });
           return;
         }
 
         // Create the room in the database
-        const roomId = await dbCreateRoom(roomName);
+        const roomId = await dbCreateRoom(trimmedRoomName);
         const newRoom = await getRoomById(roomId);
 
         // Notify all clients about the new room
         io.emit("room:created", newRoom);
 
-        console.log(`Room ${roomName} created by ${user.username}`);
+        console.log(`Room ${trimmedRoomName} created by ${user.username}`);
       } catch (error) {
         console.error("Error creating room:", error);
         socket.emit("error", { message: "Failed to create room" });
@@ -78,11 +88,6 @@ export function setupSocket(httpServer: HttpServer) {
     socket.on("message:send", async (content) => {
       try {
         const user = connectedUsers.get(socket.id);
-
-        if (!user) {
-          socket.emit("error", { message: "You must join first" });
-          return;
-        }
 
         const messageId = await createMessage(user.userId, content);
 
@@ -108,14 +113,8 @@ export function setupSocket(httpServer: HttpServer) {
             socket.leave(room);
           }
         }
-        
+
         const user = connectedUsers.get(socket.id);
-
-        if (!user) {
-          socket.emit("error", { message: "You must join as a user first" });
-          return;
-        }
-
         const room = await getRoomByName(roomName);
 
         if (!room) {
@@ -143,12 +142,6 @@ export function setupSocket(httpServer: HttpServer) {
     socket.on("room:message:send", async ({ roomName, content }) => {
       try {
         const user = connectedUsers.get(socket.id);
-
-        if (!user) {
-          socket.emit("error", { message: "You must join as a user first" });
-          return;
-        }
-
         const room = await getRoomByName(roomName);
 
         if (!room) {
@@ -167,8 +160,8 @@ export function setupSocket(httpServer: HttpServer) {
           id: messageId,
           roomId: room.id,
           content,
-          username: user.username, // Ensure correct username is sent
-          userId: user.userId, // Include userId for verification
+          username: user.username,
+          userId: user.userId,
           created_at: new Date().toISOString(),
         });
       } catch (error) {

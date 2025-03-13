@@ -1,23 +1,26 @@
 import { Router } from "express";
 import {
   getMessages,
-  createUser,
-  getRoomsList,
   createChatRoom,
+  getRoomsList,
   getRoomMessages,
 } from "../controllers/chat";
+import { register, login, getCurrentUser } from "../controllers/auth";
+import { authenticateToken } from "../middleware/auth";
 
 const router = Router();
 
-// User endpoints
-router.post("/users", createUser);
+// Auth endpoints
+router.post("/auth/register", register);
+router.post("/auth/login", login);
+router.get("/auth/me", authenticateToken, getCurrentUser);
 
 // Message endpoints
-router.get("/messages", getMessages);
+router.get("/messages", authenticateToken, getMessages);
 
 // Room endpoints
-router.get("/rooms", getRoomsList);
-router.post("/rooms", createChatRoom);
-router.get("/rooms/:roomId/messages", getRoomMessages);
+router.get("/rooms", authenticateToken, getRoomsList);
+router.post("/rooms", authenticateToken, createChatRoom);
+router.get("/rooms/:roomId/messages", authenticateToken, getRoomMessages);
 
 export default router;
